@@ -1,0 +1,205 @@
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lincoln's Pub Guide</title>
+  <link rel="stylesheet" href="/assets/styles.css" />
+</head>
+<body>
+  <div class="shell">
+    <div class="topbar">
+      <div class="brand">
+        <div class="logo">LP</div>
+        <div>
+          <h1>Venue Browser</h1>
+          <p>Actually usable on mobile. Finally.</p>
+        </div>
+      </div>
+      <a class="btn btn-secondary" href="/admin">Admin</a>
+    </div>
+
+    <section class="hero">
+      <div class="hero-copy card">
+        <h2>Lincoln’s Pub Guide</h2>
+        <p>Pick a city first, then filter by visited or wishlist. Venues stay grouped in the same collections your masterdoc uses, and each card opens into a proper description and location instead of the digital equivalent of a shrug.</p>
+      </div>
+      <div class="stats card" id="stats"></div>
+    </section>
+
+    <section class="filters card">
+      <div class="filter-grid">
+        <div class="field">
+          <label for="city">City</label>
+          <select id="city" class="input"></select>
+        </div>
+        <div class="field">
+          <label for="status">Status</label>
+          <select id="status" class="input">
+            <option value="">All</option>
+            <option value="Visited">Visited</option>
+            <option value="Wishlist">Wishlist</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="collection">Collection</label>
+          <select id="collection" class="input"></select>
+        </div>
+        <div class="field">
+          <label for="search">Search</label>
+          <input id="search" class="input" placeholder="Venue, suburb, description" />
+        </div>
+        <button id="searchBtn" class="btn btn-primary">Search</button>
+        <button id="resetBtn" class="btn btn-secondary">Reset</button>
+      </div>
+    </section>
+
+    <div class="results-head">
+      <h3 style="margin:0">Results</h3>
+      <p id="resultMeta">Loading…</p>
+    </div>
+
+    <section id="groups" class="groups"></section>
+  </div>
+
+  <script>
+    const state = { items: [], meta: null };
+    const overrideKey = 'lincoln-pub-guide-overrides-v1';
+
+    function getOverrides() {
+      try { return JSON.parse(localStorage.getItem(overrideKey) || '{}'); }
+      catch { return {}; }
+    }
+
+    function setOverride(id, status) {
+      const overrides = getOverrides();
+      overrides[id] = status;
+      localStorage.setItem(overrideKey, JSON.stringify(overrides));
+    }
+
+    function applyOverrides(items) {
+      const overrides = getOverrides();
+      return items.map(item => ({ ...item, status: overrides[item.id] || item.status }));
+    }
+
+    async function getJson(url, options) {
+      const res = await fetch(url, options);
+      if (!res.ok) throw new Error('Request failed');
+      return res.json();
+    }
+
+    function esc(text='') {
+      return String(text)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    function renderStats(meta) {
+      const stats = document.getElementById('stats');
+      stats.innerHTML = `
+        <div class="stat"><div class="k">${meta.counts.total}</div><div class="l">Venues</div></div>
+        <div class="stat"><div class="k">${meta.cities.length}</div><div class="l">Cities</div></div>
+        <div class="stat"><div class="k">${meta.counts.visited}</div><div class="l">Visited</div></div>
+        <div class="stat"><div class="k">${meta.counts.wishlist}</div><div class="l">Wishlist</div></div>
+      `;
+    }
+
+    function fillSelect(select, options, allLabel) {
+      select.innerHTML = `<option value="">${allLabel}</option>` + options.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join('');
+    }
+
+    function groupByArea(items) {
+      return items.reduce((acc, item) => {
+        const key = item.area || 'General';
+        acc[key] ||= [];
+        acc[key].push(item);
+        return acc;
+      }, {});
+    }
+
+    async function loadMeta() {
+      const meta = await getJson('/api/meta');
+      state.meta = meta;
+      fillSelect(document.getElementById('city'), meta.cities, 'All cities');
+      fillSelect(document.getElementById('collection'), meta.collections, 'All collections');
+      renderStats(meta);
+    }
+
+    async function loadVenues() {
+      const params = new URLSearchParams({
+        city: document.getElementById('city').value,
+        status: document.getElementById('status').value,
+        collection: document.getElementById('collection').value,
+        q: document.getElementById('search').value
+      });
+      const res = await getJson('/api/venues?' + params.toString());
+      state.items = applyOverrides(res.items);
+      renderGroups(state.items);
+      document.getElementById('resultMeta').textContent = `${state.items.length} match${state.items.length === 1 ? '' : 'es'}`;
+    }
+
+    function renderGroups(items) {
+      const groups = groupByArea(items);
+      const wrap = document.getElementById('groups');
+      const areas = Object.keys(groups).sort((a,b) => a.localeCompare(b));
+      if (!areas.length) {
+        wrap.innerHTML = `<div class="card panel"><p class="note">No matches. Adjust the filters and try again.</p></div>`;
+        return;
+      }
+      wrap.innerHTML = areas.map(area => `
+        <section class="group card">
+          <div class="group-title">
+            <h3>${esc(area)}</h3>
+            <div class="group-count">${groups[area].length} venue${groups[area].length === 1 ? '' : 's'}</div>
+          </div>
+          <div class="venue-grid">
+            ${groups[area].map(item => `
+              <article class="venue-card">
+                <div class="badges">
+                  <span class="badge ${item.status === 'Visited' ? 'visited' : 'wishlist'}">${esc(item.status)}</span>
+                  <span class="badge">${esc(item.category || 'Venue')}</span>
+                </div>
+                <h4 class="venue-name">${esc(item.name)}</h4>
+                <div class="venue-meta">${esc(item.city)} · ${esc(item.suburb || item.location || '')}</div>
+                <details>
+                  <summary>Open details</summary>
+                  <p>${esc(item.description || 'No description yet.')}</p>
+                  <p><strong>Location:</strong> ${esc(item.location || item.suburb || 'Not set')}</p>
+                </details>
+                <div class="switch">
+                  <label for="visit-${item.id}">Mark as visited</label>
+                  <input id="visit-${item.id}" type="checkbox" ${item.status === 'Visited' ? 'checked' : ''} onchange="toggleStatus(${item.id}, this.checked)">
+                </div>
+              </article>
+            `).join('')}
+          </div>
+        </section>
+      `).join('');
+    }
+
+    async function toggleStatus(id, checked) {
+      setOverride(id, checked ? 'Visited' : 'Wishlist');
+      await loadVenues();
+    }
+
+    document.getElementById('searchBtn').addEventListener('click', loadVenues);
+    document.getElementById('resetBtn').addEventListener('click', async () => {
+      document.getElementById('city').value = '';
+      document.getElementById('status').value = '';
+      document.getElementById('collection').value = '';
+      document.getElementById('search').value = '';
+      await loadVenues();
+    });
+    ['city','status','collection'].forEach(id => document.getElementById(id).addEventListener('change', loadVenues));
+    document.getElementById('search').addEventListener('keydown', e => { if (e.key === 'Enter') loadVenues(); });
+
+    Promise.all([loadMeta(), loadVenues()]).catch(() => {
+      document.getElementById('resultMeta').textContent = 'Could not load venues';
+    });
+  </script>
+</body>
+</html>

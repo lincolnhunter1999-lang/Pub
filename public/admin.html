@@ -1,0 +1,273 @@
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin · Lincoln's Pub Guide</title>
+  <link rel="stylesheet" href="/assets/styles.css" />
+</head>
+<body>
+  <div id="loginView" class="login-shell">
+    <div class="login-card card">
+      <div class="brand" style="margin-bottom:16px">
+        <div class="logo">LP</div>
+        <div>
+          <h1>Admin login</h1>
+          <p>Password protected. Like a grown-up website.</p>
+        </div>
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input id="password" class="input" type="password" placeholder="Enter password" />
+      </div>
+      <div class="actions" style="margin-top:14px">
+        <button id="loginBtn" class="btn btn-primary">Log in</button>
+        <a class="btn btn-secondary" href="/">Back to site</a>
+      </div>
+      <p class="note">Set <code>ADMIN_PASSWORD</code> in production. The current default is whatever you asked for.</p>
+      <p id="loginError" class="note" style="color:#ffd0d4"></p>
+    </div>
+  </div>
+
+  <div id="adminView" class="hidden">
+    <div class="shell">
+      <div class="topbar">
+        <div class="brand">
+          <div class="logo">LP</div>
+          <div>
+            <h1>Admin dashboard</h1>
+            <p>Add, edit, delete, import, export.</p>
+          </div>
+        </div>
+        <div class="actions">
+          <a class="btn btn-secondary" href="/">View site</a>
+          <button id="logoutBtn" class="btn btn-secondary">Log out</button>
+        </div>
+      </div>
+
+      <div class="admin-layout">
+        <section class="card panel">
+          <h3 id="formTitle" style="margin-top:0">Add venue</h3>
+          <div class="field"><label>Name</label><input id="fName" class="input" /></div>
+          <div class="field"><label>City</label><input id="fCity" class="input" /></div>
+          <div class="field"><label>Collection</label><input id="fArea" class="input" /></div>
+          <div class="field"><label>Category</label><input id="fCategory" class="input" /></div>
+          <div class="field"><label>Suburb</label><input id="fSuburb" class="input" /></div>
+          <div class="field"><label>Location</label><input id="fLocation" class="input" /></div>
+          <div class="field">
+            <label>Status</label>
+            <select id="fStatus" class="input"><option>Wishlist</option><option>Visited</option></select>
+          </div>
+          <div class="field"><label>Description</label><textarea id="fDescription" class="input"></textarea></div>
+          <div class="actions">
+            <button id="saveBtn" class="btn btn-primary">Save</button>
+            <button id="clearBtn" class="btn btn-secondary">Clear</button>
+          </div>
+          <hr style="border-color:var(--line);opacity:.3;margin:18px 0">
+          <div class="actions">
+            <button id="exportBtn" class="btn btn-secondary">Export JSON</button>
+            <label class="btn btn-secondary" for="importFile" style="display:inline-flex;align-items:center;justify-content:center">Import JSON</label>
+            <input id="importFile" type="file" accept="application/json" class="hidden" />
+          </div>
+          <p class="note">Import expects a plain JSON array of venue records.</p>
+        </section>
+
+        <section class="card panel">
+          <div class="results-head" style="margin-top:0">
+            <h3 style="margin:0">Venues</h3>
+            <p id="adminMeta">Loading…</p>
+          </div>
+          <div class="field" style="margin-bottom:12px">
+            <label>Quick filter</label>
+            <input id="adminSearch" class="input" placeholder="Search name, city, suburb" />
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th><th>City</th><th>Collection</th><th>Status</th><th>Location</th><th></th>
+                </tr>
+              </thead>
+              <tbody id="rows"></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let items = [];
+    let editingId = null;
+
+    function esc(text='') {
+      return String(text)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    async function getJson(url, options) {
+      const res = await fetch(url, options);
+      if (!res.ok) throw new Error('Request failed');
+      return res.json();
+    }
+
+    async function checkSession() {
+      const res = await getJson('/api/admin/session');
+      document.getElementById('loginView').classList.toggle('hidden', res.isAdmin);
+      document.getElementById('adminView').classList.toggle('hidden', !res.isAdmin);
+      if (res.isAdmin) loadRows();
+    }
+
+    async function login() {
+      const password = document.getElementById('password').value;
+      const error = document.getElementById('loginError');
+      error.textContent = '';
+      try {
+        await getJson('/api/admin/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password })
+        });
+        checkSession();
+      } catch (e) {
+        error.textContent = 'Wrong password. Tragic.';
+      }
+    }
+
+    function formData() {
+      return {
+        name: document.getElementById('fName').value.trim(),
+        city: document.getElementById('fCity').value.trim(),
+        area: document.getElementById('fArea').value.trim(),
+        category: document.getElementById('fCategory').value.trim(),
+        suburb: document.getElementById('fSuburb').value.trim(),
+        location: document.getElementById('fLocation').value.trim(),
+        status: document.getElementById('fStatus').value,
+        description: document.getElementById('fDescription').value.trim()
+      };
+    }
+
+    function clearForm() {
+      editingId = null;
+      document.getElementById('formTitle').textContent = 'Add venue';
+      ['fName','fCity','fArea','fCategory','fSuburb','fLocation','fDescription'].forEach(id => document.getElementById(id).value = '');
+      document.getElementById('fStatus').value = 'Wishlist';
+    }
+
+    async function saveVenue() {
+      const payload = formData();
+      if (!payload.name || !payload.city) {
+        alert('Name and city are required. We are not animals.');
+        return;
+      }
+      const url = editingId ? `/api/admin/venues/${editingId}` : '/api/admin/venues';
+      const method = editingId ? 'PUT' : 'POST';
+      await getJson(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      clearForm();
+      loadRows();
+    }
+
+    async function loadRows() {
+      const res = await getJson('/api/admin/venues');
+      items = res.items;
+      renderRows();
+    }
+
+    function renderRows() {
+      const q = document.getElementById('adminSearch').value.trim().toLowerCase();
+      const filtered = items.filter(item => !q || `${item.name} ${item.city} ${item.suburb||''} ${item.location||''} ${item.area||''}`.toLowerCase().includes(q));
+      document.getElementById('adminMeta').textContent = `${filtered.length} venues`;
+      document.getElementById('rows').innerHTML = filtered.map(item => `
+        <tr>
+          <td><strong>${esc(item.name)}</strong><br><span class="note">${esc(item.category || '')}</span></td>
+          <td>${esc(item.city)}</td>
+          <td>${esc(item.area || '')}</td>
+          <td><span class="badge ${item.status === 'Visited' ? 'visited' : 'wishlist'}">${esc(item.status)}</span></td>
+          <td>${esc(item.location || item.suburb || '')}</td>
+          <td>
+            <div class="actions">
+              <button class="btn btn-secondary" onclick="editVenue(${item.id})">Edit</button>
+              <button class="btn btn-danger" onclick="deleteVenue(${item.id})">Delete</button>
+            </div>
+          </td>
+        </tr>
+      `).join('');
+    }
+
+    window.editVenue = function(id) {
+      const item = items.find(v => Number(v.id) === Number(id));
+      if (!item) return;
+      editingId = id;
+      document.getElementById('formTitle').textContent = 'Edit venue';
+      document.getElementById('fName').value = item.name || '';
+      document.getElementById('fCity').value = item.city || '';
+      document.getElementById('fArea').value = item.area || '';
+      document.getElementById('fCategory').value = item.category || '';
+      document.getElementById('fSuburb').value = item.suburb || '';
+      document.getElementById('fLocation').value = item.location || '';
+      document.getElementById('fStatus').value = item.status || 'Wishlist';
+      document.getElementById('fDescription').value = item.description || '';
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    window.deleteVenue = async function(id) {
+      if (!confirm('Delete this venue?')) return;
+      await getJson(`/api/admin/venues/${id}`, { method: 'DELETE' });
+      if (editingId === id) clearForm();
+      loadRows();
+    }
+
+    async function exportJson() {
+      const res = await getJson('/api/admin/export');
+      const blob = new Blob([JSON.stringify(res.items, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'venues.json';
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    async function importJson(file) {
+      const text = await file.text();
+      const items = JSON.parse(text);
+      await getJson('/api/admin/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items })
+      });
+      clearForm();
+      loadRows();
+    }
+
+    async function logout() {
+      await getJson('/api/admin/logout', { method: 'POST' });
+      checkSession();
+    }
+
+    document.getElementById('loginBtn').addEventListener('click', login);
+    document.getElementById('password').addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
+    document.getElementById('saveBtn').addEventListener('click', saveVenue);
+    document.getElementById('clearBtn').addEventListener('click', clearForm);
+    document.getElementById('logoutBtn').addEventListener('click', logout);
+    document.getElementById('adminSearch').addEventListener('input', renderRows);
+    document.getElementById('exportBtn').addEventListener('click', exportJson);
+    document.getElementById('importFile').addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file) importJson(file);
+      e.target.value = '';
+    });
+
+    checkSession();
+  </script>
+</body>
+</html>
