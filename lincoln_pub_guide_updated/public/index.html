@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lincoln's Pub Guide</title>
+  <link rel="stylesheet" href="/assets/styles.css" />
+</head>
+<body>
+  <div class="shell">
+    <div class="topbar">
+      <div class="brand">
+        <div class="logo">LP</div>
+        <div>
+          <h1>Venue Browser</h1>
+          <p>Actually usable on mobile. Finally.</p>
+        </div>
+      </div>
+      <div class="actions top-actions">
+        <a class="btn btn-secondary" href="/admin">Admin</a>
+      </div>
+    </div>
+
+    <section class="hero">
+      <div class="hero-copy card">
+        <h2>Lincoln’s Pub Guide</h2>
+        <p>Search properly, filter by city, type, visited, wishlist or favourites, and stop guessing what “that one place in St Kilda” was meant to be.</p>
+      </div>
+      <div class="stats card" id="stats"></div>
+    </section>
+
+    <section class="filters card">
+      <div class="filter-grid filter-grid-7">
+        <div class="field">
+          <label for="city">City</label>
+          <select id="city" class="input"></select>
+        </div>
+        <div class="field">
+          <label for="status">Status</label>
+          <select id="status" class="input">
+            <option value="">All</option>
+            <option value="Visited">Visited</option>
+            <option value="Wishlist">Wishlist</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="collection">Area / Collection</label>
+          <select id="collection" class="input"></select>
+        </div>
+        <div class="field">
+          <label for="category">Type</label>
+          <select id="category" class="input"></select>
+        </div>
+        <div class="field field-search">
+          <label for="search">Search</label>
+          <input id="search" class="input" placeholder="Venue, suburb, description" />
+        </div>
+        <button id="searchBtn" class="btn btn-primary">Search</button>
+        <button id="resetBtn" class="btn btn-secondary">Reset</button>
+      </div>
+      <div class="toggle-row">
+        <button id="favFilterBtn" class="btn btn-secondary">Show favourites only</button>
+        <span class="note">Tap the heart on any venue to save it on this device.</span>
+      </div>
+    </section>
+
+    <div class="results-head">
+      <h3 style="margin:0">Results</h3>
+      <p id="resultMeta">Loading…</p>
+    </div>
+
+    <section id="groups" class="groups"></section>
+  </div>
+
+  <script>
+    const state = { items: [], meta: null, favouritesOnly: false };
+    const overrideKey = 'lincoln-pub-guide-overrides-v1';
+    const favouriteKey = 'lincoln-pub-guide-favourites-v1';
+
+    function getOverrides() {
+      try { return JSON.parse(localStorage.getItem(overrideKey) || '{}'); }
+      catch { return {}; }
+    }
+
+    function setOverride(id, status) {
+      const overrides = getOverrides();
+      overrides[id] = status;
+      localStorage.setItem(overrideKey, JSON.stringify(overrides));
+    }
+
+    function applyOverrides(items) {
+      const overrides = getOverrides();
+      return items.map(item => ({ ...item, status: overrides[item.id] || item.status }));
+    }
+
+    function getFavourites() {
+      try { return JSON.parse(localStorage.getItem(favouriteKey) || '[]'); }
+      catch { return []; }
+    }
+
+    function setFavourites(ids) {
+      localStorage.setItem(favouriteKey, JSON.stringify(ids));
+    }
+
+    function isFavourite(id) {
+      return getFavourites().includes(Number(id));
+    }
+
+    function toggleFavourite(id) {
+      const ids = getFavourites();
+      const n = Number(id);
+      const next = ids.includes(n) ? ids.filter(v => v !== n) : [...ids, n];
+      setFavourites(next);
+      renderStats(state.meta);
+      renderGroups(state.items);
+      updateFavouriteButton();
+      updateResultMeta();
+    }
+
+    async function getJson(url, options) {
+      const res = await fetch(url, options);
+      if (!res.ok) throw new Error('Request failed');
+      return res.json();
+    }
+
+    function esc(text='') {
+      return String(text)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    function renderStats(meta) {
+      if (!meta) return;
+      const stats = document.getElementById('stats');
+      const favCount = getFavourites().length;
+      stats.innerHTML = `
+        <div class="stat"><div class="k">${meta.counts.total}</div><div class="l">Venues</div></div>
+        <div class="stat"><div class="k">${meta.cities.length}</div><div class="l">Cities</div></div>
+        <div class="stat"><div class="k">${meta.counts.visited}</div><div class="l">Visited</div></div>
+        <div class="stat"><div class="k">${meta.counts.wishlist}</div><div class="l">Wishlist</div></div>
+        <div class="stat stat-wide"><div class="k">${favCount}</div><div class="l">Favourites</div></div>
+      `;
+    }
+
+    function fillSelect(select, options, allLabel) {
+      select.innerHTML = `<option value="">${allLabel}</option>` + options.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join('');
+    }
+
+    function groupByArea(items) {
+      return items.reduce((acc, item) => {
+        const key = item.area || 'General';
+        acc[key] ||= [];
+        acc[key].push(item);
+        return acc;
+      }, {});
+    }
+
+    async function loadMeta() {
+      const meta = await getJson('/api/meta');
+      state.meta = meta;
+      fillSelect(document.getElementById('city'), meta.cities, 'All cities');
+      fillSelect(document.getElementById('collection'), meta.collections, 'All areas');
+      fillSelect(document.getElementById('category'), meta.categories, 'All types');
+      renderStats(meta);
+      updateFavouriteButton();
+    }
+
+    function filterLocal(items) {
+      let next = [...items];
+      if (state.favouritesOnly) {
+        const favs = getFavourites();
+        next = next.filter(item => favs.includes(Number(item.id)));
+      }
+      return next;
+    }
+
+    function updateResultMeta() {
+      const total = state.items.length;
+      const favs = filterLocal(state.items).length;
+      const suffix = state.favouritesOnly ? ` · ${favs} favourite match${favs === 1 ? '' : 'es'}` : '';
+      document.getElementById('resultMeta').textContent = `${total} match${total === 1 ? '' : 'es'}${suffix}`;
+    }
+
+    async function loadVenues() {
+      const params = new URLSearchParams({
+        city: document.getElementById('city').value,
+        status: document.getElementById('status').value,
+        collection: document.getElementById('collection').value,
+        category: document.getElementById('category').value,
+        q: document.getElementById('search').value
+      });
+      const res = await getJson('/api/venues?' + params.toString());
+      state.items = applyOverrides(res.items);
+      renderGroups(state.items);
+      updateResultMeta();
+    }
+
+    function renderGroups(items) {
+      const filtered = filterLocal(items);
+      const groups = groupByArea(filtered);
+      const wrap = document.getElementById('groups');
+      const areas = Object.keys(groups).sort((a,b) => a.localeCompare(b));
+      if (!areas.length) {
+        wrap.innerHTML = `<div class="card panel"><p class="note">No matches. Adjust the filters and stop blaming the website.</p></div>`;
+        return;
+      }
+      wrap.innerHTML = areas.map(area => `
+        <section class="group card">
+          <div class="group-title">
+            <h3>${esc(area)}</h3>
+            <div class="group-count">${groups[area].length} venue${groups[area].length === 1 ? '' : 's'}</div>
+          </div>
+          <div class="venue-grid">
+            ${groups[area].map(item => `
+              <article class="venue-card">
+                <div class="venue-topline">
+                  <div class="badges">
+                    <span class="badge ${item.status === 'Visited' ? 'visited' : 'wishlist'}">${esc(item.status)}</span>
+                    <span class="badge">${esc(item.category || 'Venue')}</span>
+                  </div>
+                  <button class="fav-btn ${isFavourite(item.id) ? 'active' : ''}" onclick="toggleFavourite(${item.id})" aria-label="Favourite ${esc(item.name)}">♥</button>
+                </div>
+                <h4 class="venue-name">${esc(item.name)}</h4>
+                <div class="venue-meta">${esc(item.city)} · ${esc(item.suburb || item.location || '')}</div>
+                <details>
+                  <summary>Open details</summary>
+                  <p>${esc(item.description || 'No description yet.')}</p>
+                  <p><strong>Location:</strong> ${esc(item.location || item.suburb || 'Not set')}</p>
+                </details>
+                <div class="switch">
+                  <label for="visit-${item.id}">Mark as visited</label>
+                  <input id="visit-${item.id}" type="checkbox" ${item.status === 'Visited' ? 'checked' : ''} onchange="toggleStatus(${item.id}, this.checked)">
+                </div>
+              </article>
+            `).join('')}
+          </div>
+        </section>
+      `).join('');
+    }
+
+    async function toggleStatus(id, checked) {
+      setOverride(id, checked ? 'Visited' : 'Wishlist');
+      await loadVenues();
+    }
+
+    function updateFavouriteButton() {
+      const btn = document.getElementById('favFilterBtn');
+      btn.textContent = state.favouritesOnly ? 'Showing favourites only' : 'Show favourites only';
+      btn.classList.toggle('btn-primary', state.favouritesOnly);
+      btn.classList.toggle('btn-secondary', !state.favouritesOnly);
+    }
+
+    document.getElementById('favFilterBtn').addEventListener('click', () => {
+      state.favouritesOnly = !state.favouritesOnly;
+      updateFavouriteButton();
+      renderGroups(state.items);
+      updateResultMeta();
+    });
+    document.getElementById('searchBtn').addEventListener('click', loadVenues);
+    document.getElementById('resetBtn').addEventListener('click', async () => {
+      document.getElementById('city').value = '';
+      document.getElementById('status').value = '';
+      document.getElementById('collection').value = '';
+      document.getElementById('category').value = '';
+      document.getElementById('search').value = '';
+      state.favouritesOnly = false;
+      updateFavouriteButton();
+      await loadVenues();
+    });
+    ['city','status','collection','category'].forEach(id => document.getElementById(id).addEventListener('change', loadVenues));
+    document.getElementById('search').addEventListener('keydown', e => { if (e.key === 'Enter') loadVenues(); });
+
+    Promise.all([loadMeta(), loadVenues()]).catch(() => {
+      document.getElementById('resultMeta').textContent = 'Could not load venues';
+    });
+  </script>
+</body>
+</html>
