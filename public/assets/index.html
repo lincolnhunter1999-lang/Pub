@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Venues</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+body { font-family: Arial; padding:20px; }
+input, button { padding:10px; margin:5px; }
+.venue { border-bottom:1px solid #ddd; padding:10px 0; }
+.fav { cursor:pointer; color:grey; }
+.fav.active { color:red; }
+</style>
+</head>
+<body>
+
+<h1>Venue List</h1>
+
+<input id="search" placeholder="Search..." oninput="render()" />
+<button onclick="showFavs = !showFavs; render()">Toggle Favourites</button>
+
+<div id="list"></div>
+
+<script>
+let showFavs = false;
+
+let venues = [
+{ name: "Revolver", city: "Melbourne", area: "Southside", type: "Club", desc: "Iconic afters club" },
+{ name: "The Beresford", city: "Sydney", area: "City", type: "Pub", desc: "Gay-friendly courtyard" }
+];
+
+function getFavs() {
+  return JSON.parse(localStorage.getItem("favs") || "[]");
+}
+
+function toggleFav(name) {
+  let favs = getFavs();
+  if (favs.includes(name)) {
+    favs = favs.filter(f => f !== name);
+  } else {
+    favs.push(name);
+  }
+  localStorage.setItem("favs", JSON.stringify(favs));
+  render();
+}
+
+function render() {
+  const list = document.getElementById("list");
+  const search = document.getElementById("search").value.toLowerCase();
+  const favs = getFavs();
+
+  list.innerHTML = "";
+
+  venues
+    .filter(v => (!showFavs || favs.includes(v.name)))
+    .filter(v => v.name.toLowerCase().includes(search))
+    .forEach(v => {
+      const div = document.createElement("div");
+      div.className = "venue";
+      div.innerHTML = `
+        <strong>${v.name}</strong> (${v.type})<br>
+        ${v.city} - ${v.area}<br>
+        ${v.desc}<br>
+        <span class="fav ${favs.includes(v.name) ? "active" : ""}" onclick="toggleFav('${v.name}')">♥</span>
+      `;
+      list.appendChild(div);
+    });
+}
+
+render();
+</script>
+
+</body>
+</html>
